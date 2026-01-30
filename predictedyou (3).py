@@ -1,20 +1,24 @@
+# =====================================================
+# Predicted You vs Real You — Streamlit App
+# =====================================================
+
 import streamlit as st
 import joblib
-import numpy as np
 from sentence_transformers import SentenceTransformer
 
 # =====================================================
-# Streamlit Page Config
+# Page Config
 # =====================================================
 st.set_page_config(
     page_title="Predicted You vs Real You",
+    page_icon="🧠",
     layout="wide"
 )
 
 st.title("🧠 Predicted You vs Real You")
 
 # =====================================================
-# Load models ONCE (important for memory)
+# Load Models (cached to prevent reload + OOM)
 # =====================================================
 @st.cache_resource
 def load_models():
@@ -26,134 +30,128 @@ def load_models():
         "Conscientiousness": joblib.load("N_label_classifier.pkl"),
         "Agreeableness": joblib.load("T_label_classifier.pkl"),
     }
+
     return embedder, models
+
 
 embedder, models = load_models()
 
 # =====================================================
-# Prediction Logic (pure ML)
+# Inference Function
 # =====================================================
 def predict_personality(text: str):
     embedding = embedder.encode([text])
 
-    predictions = {}
+    prediction = {}
     confidence = {}
 
     for trait, model in models.items():
         pred = model.predict(embedding)[0]
         prob = model.predict_proba(embedding)[0][pred]
 
-        predictions[trait] = "High" if pred == 1 else "Low"
+        prediction[trait] = "High" if pred == 1 else "Low"
         confidence[trait] = round(float(prob), 3)
 
-    return predictions, confidence
+    return prediction, confidence
 
 # =====================================================
 # Question Bank (Real You)
 # =====================================================
-QUESTION_BANK = {
-    "Extraversion": [
-        "Do you feel energized in social gatherings?",
-        "How often do you seek out conversations?"
-    ],
-    "Openness": [
-        "Do you enjoy exploring new ideas?",
-        "How do you feel about unconventional opinions?"
-    ],
-    "Conscientiousness": [
-        "How do you plan your daily tasks?",
-        "How do you handle deadlines?"
-    ],
-    "Agreeableness": [
-        "How do you deal with conflicts?",
-        "How important is empathy to you?"
-    ]
-}
+QUESTION_BANK = [
+    ("Extraversion", "Do you feel energized in social gatherings?"),
+    ("Openness", "Do you enjoy exploring new ideas or philosophies?"),
+    ("Conscientiousness", "How do you usually plan your daily tasks?"),
+    ("Agreeableness", "How do you handle disagreements with others?")
+]
 
 # =====================================================
 # Session State Initialization
 # =====================================================
 if "real_text" not in st.session_state:
     st.session_state.real_text = ""
+
+if "q_index" not in st.session_state:
     st.session_state.q_index = 0
-    st.session_state.questions = sum(QUESTION_BANK.values(), [])
+
+if "real_result" not in st.session_state:
+    st.session_state.real_result = None
 
 # =====================================================
-# UI Layout
+# Layout
 # =====================================================
 col1, col2 = st.columns(2)
 
 # =====================================================
-# PREDICTED YOU
+# Predicted You (Essay-Based)
 # =====================================================
 with col1:
     st.subheader("📄 Predicted You (Essay-based)")
 
-    predicted_text = st.text_area(
+    essay_text = st.text_area(
         "Paste a long text / essay about yourself:",
-        height=250
+        height=300
     )
 
     if st.button("Analyze Predicted You"):
-        if len(predicted_text.strip()) < 100:
-            st.warning("Please enter a longer text for better accuracy.")
+        if len(essay_text.strip()) < 100:
+            st.warning("Please provide a longer text for accurate prediction.")
         else:
-            pred, conf = predict_personality(predicted_text)
+            pred, conf = predict_personality(essay_text)
 
-            st.markdown("### 🔍 Prediction")
+            st.markdown("### 🔍 Predicted You Results")
             for trait in pred:
                 st.write(
                     f"**{trait}**: {pred[trait]} "
                     f"(confidence: {conf[trait]})"
                 )
 
-            st.session_state.predicted_result = (pred, conf)
-
 # =====================================================
-# REAL YOU (CHATBOT STYLE)
+# Real You (Conversational)
 # =====================================================
 with col2:
     st.subheader("💬 Real You (Conversational)")
 
-    if st.session_state.q_index < len(st.session_state.questions):
-        question = st.session_state.questions[st.session_state.q_index]
-        st.markdown(f"**❓ {question}**")
+    if st.session_state.q_index < len(QUESTION_BANK):
+        trait, question = QUESTION_BANK[st.session_state.q_index]
 
-        answer = st.text_input("Your answer:", key=st.session_state.q_index)
+        st.markdown(f"❓ **{question}**")
+        answer = st.text_input("Your answer:", key=f"answer_{st.session_state.q_index}")
 
-        if st.button("Next"):
-            st.session_state.real_text += " " + answer
-            st.session_state.q_index += 1
-            st.experimental_rerun()
+        if st.button("Next", key=f"next_{st.session_state.q_index}"):
+            if answer.strip():
+                st.session_state.real_text += " " + answer
+                st.session_state.q_index += 1
+                st.rerun()
+            else:
+                st.warning("Please enter an answer before continuing.")
+
     else:
-        st.success("All questions answered!")
+        if st.session_state.real_result is None:
+            pred, conf = predict_personality(st.session_state.real_text)
+            st.session_state.real_result = (pred, conf)
 
-        pred, conf = predict_personality(st.session_state.real_text)
+        st.markdown("### 🎯 Real You Results")
+        pred, conf = st.session_state.real_result
 
-        st.markdown("### 🧠 Real You Profile")
         for trait in pred:
             st.write(
                 f"**{trait}**: {pred[trait]} "
                 f"(confidence: {conf[trait]})"
             )
 
-        st.session_state.real_result = (pred, conf)
-
 # =====================================================
-# COMPARISON SECTION
+# Comparison Section
 # =====================================================
-st.markdown("---")
-st.subheader("📊 Comparison")
+if st.session_state.real_result and essay_text.strip():
+    st.markdown("---")
+    st.subheader("🆚 Comparison: Predicted You vs Real You")
 
-if "predicted_result" in st.session_state and "real_result" in st.session_state:
-    p_pred, p_conf = st.session_state.predicted_result
-    r_pred, r_conf = st.session_state.real_result
+    pred_pred, pred_conf = predict_personality(essay_text)
+    real_pred, real_conf = st.session_state.real_result
 
-    for trait in p_pred:
+    for trait in pred_pred:
         st.write(
             f"**{trait}** → "
-            f"Predicted You: {p_pred[trait]} ({p_conf[trait]}) | "
-            f"Real You: {r_pred[trait]} ({r_conf[trait]})"
+            f"Predicted You: {pred_pred[trait]} ({pred_conf[trait]}) | "
+            f"Real You: {real_pred[trait]} ({real_conf[trait]})"
         )
-else:
-    st.info("Complete both Predicted You and Real You to see comparison.")
