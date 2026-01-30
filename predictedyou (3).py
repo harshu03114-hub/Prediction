@@ -2,25 +2,25 @@ import streamlit as st
 import pickle
 import numpy as np
 import plotly.graph_objects as go
+from sentence_transformers import SentenceTransformer
 
-# ---------------------------
-# App Config
-# ---------------------------
+# --------------------------------------------------
+# PAGE CONFIG
+# --------------------------------------------------
 st.set_page_config(
     page_title="Predicted You vs Real You",
     layout="wide"
 )
 
 st.title("🧠 Predicted You vs Real You")
-st.caption("A self-perception vs behavioral personality analysis")
+st.caption("Essay-based prediction vs conversational personality discovery")
 
-# ---------------------------
-# Load Models
-# ---------------------------
+# --------------------------------------------------
+# LOAD MODELS (SAFE)
+# --------------------------------------------------
 @st.cache_resource
 def load_models():
-    with open("sentence_embedder.pkl", "rb") as f:
-        embedder = pickle.load(f)
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
     models = {
         "E": pickle.load(open("E_label_classifier.pkl", "rb")),
@@ -28,158 +28,152 @@ def load_models():
         "N": pickle.load(open("N_label_classifier.pkl", "rb")),
         "T": pickle.load(open("T_label_classifier.pkl", "rb")),
     }
-
     return embedder, models
-
 
 embedder, models = load_models()
 
-# ---------------------------
-# Questions
-# ---------------------------
-QUESTIONS = [
-    "I feel confident speaking in front of a group.",
-    "I prefer planning over spontaneity.",
-    "I trust logic more than emotions while making decisions.",
-    "I enjoy meeting new people.",
-    "I often reflect deeply before acting.",
-    "I stay calm under pressure.",
-    "I like analyzing problems from multiple angles.",
-    "I feel energized after social interactions."
-]
+# --------------------------------------------------
+# HELPER FUNCTIONS
+# --------------------------------------------------
+def predict_personality(text):
+    vec = embedder.encode([text])
+    scores = {}
 
-# ---------------------------
-# Sidebar – Instructions
-# ---------------------------
-st.sidebar.header("📝 Instructions")
-st.sidebar.write(
-    "Answer honestly. Your *Real You* is how you see yourself. "
-    "Your *Predicted You* is inferred from your language patterns."
-)
+    for trait, model in models.items():
+        prob = model.predict_proba(vec)[0][1]
+        scores[trait] = prob
 
-# ---------------------------
-# Collect Answers
-# ---------------------------
-st.header("Answer the following questions")
+    return scores
 
-user_answers = []
-confidence_inputs = []
 
-for i, q in enumerate(QUESTIONS):
-    st.subheader(f"Q{i+1}. {q}")
+def stabilize_scores(scores):
+    """Confidence stabilisation to avoid extreme jumps"""
+    stabilized = {}
+    for k, v in scores.items():
+        stabilized[k] = 0.7 * v + 0.3 * 0.5
+    return stabilized
 
-    ans = st.text_input("Your response", key=f"ans_{i}")
-    conf = st.slider("How confident are you in this answer?", 0, 100, 50, key=f"conf_{i}")
 
-    user_answers.append(ans)
-    confidence_inputs.append(conf)
-
-# ---------------------------
-# Process Button
-# ---------------------------
-if st.button("🔍 Analyze Me"):
-
-    # Remove empty answers
-    filtered = [(a, c) for a, c in zip(user_answers, confidence_inputs) if a.strip()]
-
-    if len(filtered) < 3:
-        st.error("Please answer at least 3 questions.")
-        st.stop()
-
-    texts, confs = zip(*filtered)
-
-    # ---------------------------
-    # Embeddings
-    # ---------------------------
-    embeddings = embedder.encode(list(texts))
-
-    # ---------------------------
-    # Predicted You (ML)
-    # ---------------------------
-    predicted_scores = []
-
-    for key in ["E", "I", "N", "T"]:
-        probs = models[key].predict_proba(embeddings)[:, 1]
-        weighted = np.average(probs * 100, weights=confs)
-        predicted_scores.append(weighted)
-
-    # ---------------------------
-    # Real You (Self-report)
-    # ---------------------------
-    real_scores = [
-        np.mean(confs),
-        100 - np.mean(confs),
-        np.std(confs) * 5,
-        np.mean(confs) * 0.8
+def radar_chart(predicted, real):
+    labels = ["Extroversion", "Introversion", "Intuition", "Thinking"]
+    pred_values = [
+        predicted["E"],
+        1 - predicted["E"],
+        predicted["N"],
+        predicted["T"]
+    ]
+    real_values = [
+        real["E"],
+        1 - real["E"],
+        real["N"],
+        real["T"]
     ]
 
-    traits = [
-        "Confidence",
-        "Social Orientation",
-        "Analytical Thinking",
-        "Emotional Stability"
-    ]
+    fig = go.Figure()
 
-    # ---------------------------
-    # Radar Chart
-    # ---------------------------
-    st.subheader("🕸 Personality Radar")
-
-    radar = go.Figure()
-
-    radar.add_trace(go.Scatterpolar(
-        r=real_scores,
-        theta=traits,
-        fill='toself',
-        name="Real You"
-    ))
-
-    radar.add_trace(go.Scatterpolar(
-        r=predicted_scores,
-        theta=traits,
+    fig.add_trace(go.Scatterpolar(
+        r=pred_values,
+        theta=labels,
         fill='toself',
         name="Predicted You"
     ))
 
-    radar.update_layout(
-        polar=dict(radialaxis=dict(range=[0, 100])),
+    fig.add_trace(go.Scatterpolar(
+        r=real_values,
+        theta=labels,
+        fill='toself',
+        name="Real You"
+    ))
+
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
         showlegend=True
     )
 
-    st.plotly_chart(radar, use_container_width=True)
+    return fig
 
-    # ---------------------------
-    # Confidence Stabilisation Curve
-    # ---------------------------
-    st.subheader("📈 Confidence Stabilisation")
 
-    curve = go.Figure()
-    curve.add_trace(go.Scatter(
-        y=list(np.cumsum(confs) / np.arange(1, len(confs) + 1)),
-        mode="lines+markers",
-        name="Confidence Stability"
-    ))
+def explain_personality(pred, real):
+    explanation = []
 
-    curve.update_layout(
-        xaxis_title="Question Progression",
-        yaxis_title="Stabilized Confidence"
+    if pred["E"] > real["E"]:
+        explanation.append(
+            "You **appear more outgoing in writing** than you feel internally. "
+            "You may express confidence intellectually but conserve social energy."
+        )
+    else:
+        explanation.append(
+            "You are **more socially expressive in real interactions** than your writing suggests."
+        )
+
+    if pred["N"] > 0.6 and real["N"] > 0.6:
+        explanation.append(
+            "You are strongly **intuitive and future-oriented**, preferring concepts over routines."
+        )
+
+    if pred["T"] > real["T"]:
+        explanation.append(
+            "You rely on **structured logic when reflecting**, but emotionally calibrate decisions in real life."
+        )
+
+    explanation.append(
+        "Overall, you show a **high self-awareness gap** — you understand yourself deeply, "
+        "but regulate how much of it you externally project."
     )
 
-    st.plotly_chart(curve, use_container_width=True)
+    return "\n\n".join(explanation)
 
-    # ---------------------------
-    # Personality Explanation
-    # ---------------------------
-    st.subheader("🧩 Who You Are As A Person")
+# --------------------------------------------------
+# UI LAYOUT
+# --------------------------------------------------
+left, right = st.columns(2)
 
-    for t, r, p in zip(traits, real_scores, predicted_scores):
-        diff = p - r
+# ----------------- PREDICTED YOU ------------------
+with left:
+    st.subheader("📄 Predicted You (Essay-based)")
+    essay = st.text_area(
+        "Paste a long text / essay about yourself:",
+        height=280
+    )
 
-        if diff > 15:
-            st.write(f"• You underestimate your **{t.lower()}**. Your responses show it’s stronger than you believe.")
-        elif diff < -15:
-            st.write(f"• You may **overestimate your {t.lower()}**, but your behavior suggests more nuance.")
-        else:
-            st.write(f"• Your self-perception of **{t.lower()}** is well aligned with your actual patterns.")
+    analyze_essay = st.button("Analyze Predicted You")
 
-    st.success("Analysis complete ✨")
+# ----------------- REAL YOU -----------------------
+with right:
+    st.subheader("💬 Real You (Conversational)")
+
+    questions = [
+        "Do you feel energized in social gatherings?",
+        "Do you rely more on intuition than facts?",
+        "Do you prefer logic over emotions when deciding?",
+        "Do you enjoy exploring abstract ideas?",
+    ]
+
+    answers = []
+    for q in questions:
+        answers.append(st.text_input(q, key=q))
+
+    analyze_real = st.button("Analyze Real You")
+
+# --------------------------------------------------
+# PROCESS RESULTS
+# --------------------------------------------------
+if analyze_essay and analyze_real:
+    if essay.strip() == "" or any(a.strip() == "" for a in answers):
+        st.warning("Please complete both sections.")
+    else:
+        predicted_scores = stabilize_scores(
+            predict_personality(essay)
+        )
+
+        real_text = " ".join(answers)
+        real_scores = stabilize_scores(
+            predict_personality(real_text)
+        )
+
+        st.subheader("📊 Personality Radar Comparison")
+        fig = radar_chart(predicted_scores, real_scores)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("🧠 Who You Are (Interpretation)")
+        st.markdown(explain_personality(predicted_scores, real_scores))
