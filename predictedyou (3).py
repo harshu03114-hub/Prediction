@@ -1,40 +1,24 @@
-# =====================================================
-# STREAMLIT APP: PREDICTED YOU vs REAL YOU
-# =====================================================
-
-# Install necessary libraries
-#!pip install -q streamlit sentence-transformers joblib
-
 import streamlit as st
-import numpy as np
 import joblib
+import numpy as np
 from sentence_transformers import SentenceTransformer
-import os
 
 # =====================================================
-# Load models (CACHED)
+# Streamlit Page Config
 # =====================================================
+st.set_page_config(
+    page_title="Predicted You vs Real You",
+    layout="wide"
+)
 
+st.title("🧠 Predicted You vs Real You")
+
+# =====================================================
+# Load models ONCE (important for memory)
+# =====================================================
 @st.cache_resource
 def load_models():
-    embedder_path = "sentence_embedder.pkl"
-    embedder = None
-    try:
-        # Try to load the local pickled SentenceTransformer model
-        embedder = joblib.load(embedder_path)
-        st.success("Sentence embedder loaded successfully from local file.")
-    except (EOFError, FileNotFoundError, joblib.externals.loky.process_executor.BrokenProcessPool) as e:
-        st.warning(f"Could not load sentence embedder from '{embedder_path}': {e}")
-        st.info("Attempting to download and save a default SentenceTransformer model.")
-        try:
-            # If loading fails, download a default model and save it
-            default_model_name = "all-MiniLM-L6-v2"
-            embedder = SentenceTransformer(default_model_name)
-            joblib.dump(embedder, embedder_path)
-            st.success(f"Downloaded and saved '{default_model_name}' as '{embedder_path}'.")
-        except Exception as download_e:
-            st.error(f"Failed to download and save default SentenceTransformer model: {download_e}")
-            raise
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
     models = {
         "Extraversion": joblib.load("E_label_classifier.pkl"),
@@ -47,148 +31,129 @@ def load_models():
 embedder, models = load_models()
 
 # =====================================================
-# Core inference (pure ML)
+# Prediction Logic (pure ML)
 # =====================================================
-
-def predict_personality(text: str) -> dict:
+def predict_personality(text: str):
     embedding = embedder.encode([text])
 
     predictions = {}
-    probabilities = {}
+    confidence = {}
 
     for trait, model in models.items():
         pred = model.predict(embedding)[0]
         prob = model.predict_proba(embedding)[0][pred]
 
         predictions[trait] = "High" if pred == 1 else "Low"
-        probabilities[trait] = round(float(prob), 3)
+        confidence[trait] = round(float(prob), 3)
 
-    return {
-        "prediction": predictions,
-        "confidence": probabilities
-    }
+    return predictions, confidence
 
 # =====================================================
-# Question bank
+# Question Bank (Real You)
 # =====================================================
-
 QUESTION_BANK = {
     "Extraversion": [
-        "Do you feel energized when spending time with groups of people?",
-        "How do you usually behave in social gatherings?"
+        "Do you feel energized in social gatherings?",
+        "How often do you seek out conversations?"
     ],
     "Openness": [
-        "Do you enjoy exploring new ideas or philosophies?",
-        "How do you react to unconventional opinions?"
+        "Do you enjoy exploring new ideas?",
+        "How do you feel about unconventional opinions?"
     ],
     "Conscientiousness": [
-        "How do you plan and organize your daily tasks?",
-        "What is your approach to deadlines?"
+        "How do you plan your daily tasks?",
+        "How do you handle deadlines?"
     ],
     "Agreeableness": [
-        "How do you usually handle conflicts with others?",
-        "How important is empathy in your relationships?"
+        "How do you deal with conflicts?",
+        "How important is empathy to you?"
     ]
 }
 
 # =====================================================
-# Streamlit UI
-# =================================0====================
+# Session State Initialization
+# =====================================================
+if "real_text" not in st.session_state:
+    st.session_state.real_text = ""
+    st.session_state.q_index = 0
+    st.session_state.questions = sum(QUESTION_BANK.values(), [])
 
-st.set_page_config(page_title="Predicted You vs Real You", layout="centered")
-st.title("🧠 Predicted You vs Real You")
-
-mode = st.radio(
-    "Choose Mode",
-    ["Predicted You (Essay)", "Real You (Interactive)", "Comparison"]
-)
+# =====================================================
+# UI Layout
+# =====================================================
+col1, col2 = st.columns(2)
 
 # =====================================================
 # PREDICTED YOU
 # =====================================================
+with col1:
+    st.subheader("📄 Predicted You (Essay-based)")
 
-if mode == "Predicted You (Essay)":
-    st.header("✍️ Predicted You")
-
-    essay = st.text_area(
-        "Write about yourself (essay / bio / thoughts)",
+    predicted_text = st.text_area(
+        "Paste a long text / essay about yourself:",
         height=250
     )
 
-    if st.button("Analyze"):
-        if len(essay.strip()) < 100:
-            st.warning("Please write at least 100 characters.")
+    if st.button("Analyze Predicted You"):
+        if len(predicted_text.strip()) < 100:
+            st.warning("Please enter a longer text for better accuracy.")
         else:
-            result = predict_personality(essay)
-            st.session_state["predicted_you"] = result
+            pred, conf = predict_personality(predicted_text)
 
-            st.subheader("Result")
-            for trait in result["prediction"]:
+            st.markdown("### 🔍 Prediction")
+            for trait in pred:
                 st.write(
-                    f"**{trait}**: {result['prediction'][trait]} "
-                    f"(confidence: {result['confidence'][trait]})"
+                    f"**{trait}**: {pred[trait]} "
+                    f"(confidence: {conf[trait]})"
                 )
 
-# =====================================================
-# REAL YOU
-# =====================================================
+            st.session_state.predicted_result = (pred, conf)
 
-elif mode == "Real You (Interactive)":
-    st.header("💬 Real You Chatbot")
-
-    if "real_text" not in st.session_state:
-        st.session_state.real_text = ""
-        st.session_state.q_index = 0
-        st.session_state.questions = [
-            q for qs in QUESTION_BANK.values() for q in qs
-        ]
+# =====================================================
+# REAL YOU (CHATBOT STYLE)
+# =====================================================
+with col2:
+    st.subheader("💬 Real You (Conversational)")
 
     if st.session_state.q_index < len(st.session_state.questions):
         question = st.session_state.questions[st.session_state.q_index]
-        st.write(f"❓ {question}")
+        st.markdown(f"**❓ {question}**")
 
-        answer = st.text_input(
-            "Your answer",
-            key=f"answer_{st.session_state.q_index}"
-        )
+        answer = st.text_input("Your answer:", key=st.session_state.q_index)
 
         if st.button("Next"):
             st.session_state.real_text += " " + answer
             st.session_state.q_index += 1
             st.experimental_rerun()
     else:
-        st.success("Enough data collected!")
+        st.success("All questions answered!")
 
-        result = predict_personality(st.session_state.real_text)
-        st.session_state["real_you"] = result
+        pred, conf = predict_personality(st.session_state.real_text)
 
-        st.subheader("Real You Profile")
-        for trait in result["prediction"]:
+        st.markdown("### 🧠 Real You Profile")
+        for trait in pred:
             st.write(
-                f"**{trait}**: {result['prediction'][trait]} "
-                f"(confidence: {result['confidence'][trait]})"
+                f"**{trait}**: {pred[trait]} "
+                f"(confidence: {conf[trait]})"
             )
+
+        st.session_state.real_result = (pred, conf)
 
 # =====================================================
-# COMPARISON
+# COMPARISON SECTION
 # =====================================================
+st.markdown("---")
+st.subheader("📊 Comparison")
 
-elif mode == "Comparison":
-    st.header("⚖️ Comparison")
+if "predicted_result" in st.session_state and "real_result" in st.session_state:
+    p_pred, p_conf = st.session_state.predicted_result
+    r_pred, r_conf = st.session_state.real_result
 
-    if "predicted_you" not in st.session_state or "real_you" not in st.session_state:
-        st.warning("Please complete both Predicted You and Real You first.")
-    else:
-        p = st.session_state["predicted_you"]
-        r = st.session_state["real_you"]
-
-        for trait in p["prediction"]:
-            st.markdown(f"### {trait}")
-            st.write(
-                f"Predicted You: {p['prediction'][trait]} "
-                f"(conf: {r['confidence'][trait]})"
-            )
-            st.write(
-                f"Real You: {r['prediction'][trait]} "
-                f"(conf: {r['confidence'][trait]})"
-            )
+    for trait in p_pred:
+        st.write(
+            f"**{trait}** → "
+            f"Predicted You: {p_pred[trait]} ({p_conf[trait]}) | "
+            f"Real You: {r_pred[trait]} ({r_conf[trait]})"
+        )
+else:
+    st.info("Complete both Predicted You and Real You to see comparison.")
