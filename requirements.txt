@@ -2,5 +2,6 @@ streamlit
 sentence-transformers
 scikit-learn
 joblib
-numpy
 torch
+numpy
+plotly
